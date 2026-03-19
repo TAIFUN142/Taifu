@@ -6,6 +6,6 @@ bot = telebot.TeleBot(TOKEN)
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    bot.send_message(message.chat.id, "Бот работает, бро!")
+    bot.reply_to(message, "Бот работает, бро!")
 
-bot.infinity_polling()
+bot.polling(none_stop=True)
