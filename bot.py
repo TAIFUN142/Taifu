@@ -1,12 +1,10 @@
+
 import os
+import time
 import telebot
 from telebot import types
 
 TOKEN = os.getenv("BOT_TOKEN")
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не найден в переменных окружения")
-
 bot = telebot.TeleBot(TOKEN)
 
 
@@ -127,4 +125,6 @@ def echo_handler(message):
 
 
 if __name__ == "__main__":
-    bot.infinity_polling(skip_pending=True, long_polling_timeout=30)
+    bot.remove_webhook()
+    time.sleep(1)
+    bot.infinity_polling(skip_pending=True)
