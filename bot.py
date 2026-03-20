@@ -4,6 +4,10 @@ import telebot
 from telebot import types
 
 TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не найден в переменных окружения")
+
 bot = telebot.TeleBot(TOKEN)
 
 
