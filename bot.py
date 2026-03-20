@@ -9,7 +9,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-ADMIN_ID = 123456789  # <-- ВСТАВЬ СВОЙ TELEGRAM ID
+ADMIN_ID = 8385943123  # <-- ВСТАВЬ СВОЙ TELEGRAM ID
 POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
 
 bot = telebot.TeleBot(TOKEN)
