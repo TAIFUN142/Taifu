@@ -22,6 +22,9 @@ if not TOKEN:
 
 POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
 ADMIN_ID = 8385943123
+
+BUY_IMAGE_URL = "https://avatars.mds.yandex.net/i?id=4521c3bbb4c12fa8a2af77bc19a2b5d107bca1c3-4593296-images-thumbs&n=13"
+SELL_IMAGE_URL = "https://img-s-msn-com.akamaized.net/tenant/amp/entityid/AA1KsnBG.img?w=1500&h=1000&m=4&q=79"
 # ===============================
 
 bot = telebot.TeleBot(TOKEN)
@@ -951,6 +954,16 @@ def format_signal_message(signal_data, selected_asset=None, asset_source="🎲 �
 """
 
 
+def send_signal_image(chat_id, direction):
+    try:
+        if direction == "BUY":
+            bot.send_photo(chat_id, BUY_IMAGE_URL)
+        elif direction == "SELL":
+            bot.send_photo(chat_id, SELL_IMAGE_URL)
+    except Exception as e:
+        print(f"Ошибка отправки картинки сигнала: {e}")
+
+
 def store_signal(user_id, signal_data):
     execute_query(
         """INSERT INTO signals (user_id, signal_date, asset, direction, timeframe, confidence)
@@ -1054,6 +1067,7 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
 
         signal_message = format_signal_message(signal_data, asset_source=asset_source)
         bot.send_message(message.chat.id, signal_message, parse_mode="Markdown")
+        send_signal_image(message.chat.id, signal_data["direction"])
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
@@ -1297,6 +1311,12 @@ def process_pocket_id(message):
             return
 
         execute_query(
+            "DELETE FROM verification_requests WHERE user_id = ? AND status = 'PENDING'",
+            (user.id,),
+            commit=True
+        )
+
+        execute_query(
             "UPDATE users SET pocket_id = ? WHERE telegram_id = ?",
             (pocket_id, user.id),
             commit=True
@@ -1332,8 +1352,14 @@ def process_pocket_id(message):
 
         try:
             bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown", reply_markup=markup)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Ошибка отправки заявки админу: {e}")
+            bot.send_message(
+                user.id,
+                "❌ Не удалось отправить заявку админу. Попробуйте позже.",
+                reply_markup=create_main_menu()
+            )
+            return
 
         bot.send_message(
             user.id,
@@ -1743,6 +1769,7 @@ def handle_asset_callback(call):
             asset_source="🎯 По вашему выбору"
         )
         bot.send_message(call.message.chat.id, signal_message, parse_mode="Markdown")
+        send_signal_image(call.message.chat.id, signal_data["direction"])
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
