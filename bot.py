@@ -6,6 +6,7 @@ import traceback
 import requests
 import pandas as pd
 import yfinance as yf
+import os
 
 from datetime import datetime
 from telebot import types
@@ -15,9 +16,12 @@ print("🤖 БОТ С СИГНАЛАМИ BINARY OPTIONS + РЕФЕРАЛЬНАЯ
 print("=" * 60)
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "8505054273:AAEKBGGi0SoSee2S0PzvXjFBnTSoR5Gq9bU"
+TOKEN = "PASTE_NEW_TOKEN_HERE"
 POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
 ADMIN_ID = 8385943123
+
+BUY_IMAGE_PATH = "images/buy.jpg"
+SELL_IMAGE_PATH = "images/sell.jpg"
 # ===============================
 
 bot = telebot.TeleBot(TOKEN)
@@ -240,6 +244,72 @@ def ensure_owner_access():
 
 
 ensure_owner_access()
+
+
+# ========== ВСПОМОГАТЕЛЬНОЕ ==========
+def admin_can_receive_messages():
+    try:
+        bot.send_chat_action(ADMIN_ID, "typing")
+        return True
+    except Exception as e:
+        print(f"⚠️ Бот не может написать админу {ADMIN_ID}: {e}")
+        return False
+
+
+def notify_admin_verification_request(user, pocket_id):
+    try:
+        user_data = get_user(user.id)
+        user_dict = dict(user_data) if user_data else {}
+
+        admin_message = f"""
+🆕 **НОВЫЙ ЗАПРОС НА ВЕРИФИКАЦИЮ**
+
+👤 **Пользователь:**
+├ ID: `{user.id}`
+├ Имя: {user_dict.get('first_name', user.first_name)}
+├ Username: @{user.username if user.username else 'нет'}
+└ Pocket ID: {pocket_id}
+
+📅 **Время запроса:** {datetime.now().strftime("%H:%M %d.%m.%Y")}
+"""
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"verify_approve_{user.id}"),
+            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"verify_reject_{user.id}")
+        )
+
+        bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown", reply_markup=markup)
+        print(f"✅ Заявка на верификацию отправлена админу: {user.id}")
+        return True
+
+    except Exception as e:
+        print(f"❌ Ошибка отправки заявки админу: {e}")
+        traceback.print_exc()
+        return False
+
+
+def send_signal_photo(chat_id, direction):
+    try:
+        if direction == "BUY":
+            image_path = BUY_IMAGE_PATH
+            caption = "🟢 Сигнал: ПОКУПКА (CALL)"
+        elif direction == "SELL":
+            image_path = SELL_IMAGE_PATH
+            caption = "🔴 Сигнал: ПРОДАЖА (PUT)"
+        else:
+            return
+
+        if not os.path.exists(image_path):
+            print(f"⚠️ Файл изображения не найден: {image_path}")
+            return
+
+        with open(image_path, "rb") as photo:
+            bot.send_photo(chat_id, photo, caption=caption)
+
+    except Exception as e:
+        print(f"⚠️ Ошибка при отправке фото сигнала: {e}")
+        traceback.print_exc()
 
 
 # ========== АНАЛИЗАТОР ==========
@@ -1051,6 +1121,7 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
 
         signal_message = format_signal_message(signal_data, asset_source=asset_source)
         bot.send_message(message.chat.id, signal_message, parse_mode="Markdown")
+        send_signal_photo(message.chat.id, signal_data["direction"])
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
@@ -1120,6 +1191,12 @@ def start_command(message):
             parse_mode="Markdown",
             reply_markup=create_main_menu()
         )
+
+        if message.from_user.id == ADMIN_ID:
+            bot.send_message(
+                message.chat.id,
+                "👑 Админ-чат активирован. Теперь бот может присылать вам заявки на верификацию."
+            )
 
     except Exception:
         traceback.print_exc()
@@ -1306,37 +1383,20 @@ def process_pocket_id(message):
             commit=True
         )
 
-        user_data = get_user(user.id)
-        user_dict = dict(user_data) if user_data else {}
+        admin_sent = notify_admin_verification_request(user, pocket_id)
 
-        admin_message = f"""
-🆕 **НОВЫЙ ЗАПРОС НА ВЕРИФИКАЦИЮ**
-
-👤 **Пользователь:**
-├ ID: `{user.id}`
-├ Имя: {user_dict.get('first_name', user.first_name)}
-├ Username: @{user.username if user.username else 'нет'}
-└ Pocket ID: {pocket_id}
-
-📅 **Время запроса:** {datetime.now().strftime("%H:%M %d.%m.%Y")}
-"""
-
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"verify_approve_{user.id}"),
-            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"verify_reject_{user.id}")
-        )
-
-        try:
-            bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown", reply_markup=markup)
-        except Exception:
-            pass
-
-        bot.send_message(
-            user.id,
-            "✅ Ваш запрос на верификацию отправлен администратору!\n\n⏳ Ожидайте проверки.",
-            reply_markup=create_main_menu()
-        )
+        if admin_sent:
+            bot.send_message(
+                user.id,
+                "✅ Ваш запрос на верификацию отправлен администратору!\n\n⏳ Ожидайте проверки.",
+                reply_markup=create_main_menu()
+            )
+        else:
+            bot.send_message(
+                user.id,
+                "✅ Ваш запрос сохранен, но возникла проблема с отправкой уведомления администратору.\n\n⏳ Заявка осталась в базе, администратор сможет проверить её через /verify_pending.",
+                reply_markup=create_main_menu()
+            )
 
     except Exception:
         traceback.print_exc()
@@ -1476,7 +1536,7 @@ def refs_handler(message):
             bot_username = bot_info.username
             ref_link = f"https://t.me/{bot_username}?start={user.id}"
         except Exception:
-            ref_link = "https://t.me/ваш_бот?start={user.id}"
+            ref_link = f"https://t.me/ваш_бот?start={user.id}"
 
         ref_count_result = execute_query(
             "SELECT COUNT(*) as count FROM referrals WHERE referrer_id = ?",
@@ -1535,6 +1595,12 @@ def help_handler(message):
 • Это не гарантия результата
 • OTC считается через proxy-анализ по обычному активу
 • Торгуйте ответственно
+
+👑 **ЕСЛИ ВЫ АДМИН И ЗАЯВКИ НЕ ПРИХОДЯТ:**
+• Откройте бота
+• Нажмите /start с аккаунта администратора
+• После этого бот сможет присылать вам заявки
+• Также используйте /verify_pending для просмотра заявок из базы
 """
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown", reply_markup=create_main_menu())
 
@@ -1740,6 +1806,7 @@ def handle_asset_callback(call):
             asset_source="🎯 По вашему выбору"
         )
         bot.send_message(call.message.chat.id, signal_message, parse_mode="Markdown")
+        send_signal_photo(call.message.chat.id, signal_data["direction"])
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
@@ -1998,6 +2065,22 @@ def reset_command(message):
     )
 
 
+@bot.message_handler(commands=["adminchat"])
+def adminchat_command(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ Только для администратора.")
+        return
+
+    ok = admin_can_receive_messages()
+    if ok:
+        bot.send_message(message.chat.id, "✅ Всё норм. Бот может писать вам в личку.")
+    else:
+        bot.send_message(
+            message.chat.id,
+            "❌ Бот пока не может писать вам в личку.\n\nНажмите /start в чате с ботом именно с админского аккаунта."
+        )
+
+
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     print("\n" + "=" * 60)
@@ -2017,6 +2100,16 @@ if __name__ == "__main__":
     print(f"├ Индексы: {len(INDICES_ASSETS)}")
     print(f"└ OTC: {len(OTC_ASSETS)}")
     print("=" * 60)
+
+    if os.path.exists(BUY_IMAGE_PATH):
+        print(f"✅ BUY картинка найдена: {BUY_IMAGE_PATH}")
+    else:
+        print(f"⚠️ BUY картинка НЕ найдена: {BUY_IMAGE_PATH}")
+
+    if os.path.exists(SELL_IMAGE_PATH):
+        print(f"✅ SELL картинка найдена: {SELL_IMAGE_PATH}")
+    else:
+        print(f"⚠️ SELL картинка НЕ найдена: {SELL_IMAGE_PATH}")
 
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
