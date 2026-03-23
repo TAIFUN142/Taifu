@@ -16,7 +16,7 @@ print("🤖 БОТ С СИГНАЛАМИ BINARY OPTIONS + РЕФЕРАЛЬНАЯ
 print("=" * 60)
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "ВСТАВЬ_СЮДА_НОВЫЙ_ТОКЕН"
+TOKEN = "8505054273:AAEKBGGi0SoSee2S0PzvXjFBnTSoR5Gq9bU"
 POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
 ADMIN_ID = 8385943123
 
