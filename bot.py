@@ -1,32 +1,36 @@
-import telebot
-import sqlite3
-import random
+import os
 import time
+import random
+import sqlite3
 import traceback
+from datetime import datetime
+
 import requests
 import pandas as pd
 import yfinance as yf
-import os
-
-from datetime import datetime
+import telebot
 from telebot import types
 
 print("=" * 60)
-print("🤖 БОТ С СИГНАЛАМИ BINARY OPTIONS + РЕФЕРАЛЬНАЯ СИСТЕМА")
+print("🤖 БОТ С СИГНАЛАМИ + ВЕРИФИКАЦИЯ + ФОТО")
 print("=" * 60)
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "8505054273:AAEKBGGi0SoSee2S0PzvXjFBnTSoR5Gq9bU"
+TOKEN = "ВСТАВЬ_СВОЙ_НОВЫЙ_ТОКЕН_СЮДА"
 POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
 ADMIN_ID = 8385943123
 
 BUY_IMAGE_PATH = "images/buy.jpg"
 SELL_IMAGE_PATH = "images/sell.jpg"
+DB_NAME = "pocket_bot.db"
 # ===============================
+
+if ":" not in TOKEN:
+    raise ValueError("TOKEN указан неверно. У токена должен быть формат 123456:ABC...")
 
 bot = telebot.TeleBot(TOKEN)
 
-# ========== НАСТРОЙКИ АКТИВОВ ==========
+# ========== АКТИВЫ ==========
 CRYPTO_ASSETS = [
     "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD", "XRP/USD",
     "ADA/USD", "DOGE/USD", "DOT/USD", "MATIC/USD", "SHIB/USD",
@@ -74,21 +78,39 @@ OTC_ASSETS = [
 ]
 
 ALL_ASSETS = CRYPTO_ASSETS + FOREX_ASSETS + COMMODITIES_ASSETS + INDICES_ASSETS + OTC_ASSETS
-
 TIMEFRAMES = ["1 мин", "5 мин", "15 мин", "30 мин", "1 час", "4 часа", "1 день"]
 
-
-# ========== БАЗА ДАННЫХ ==========
+# ========== БАЗА ==========
 def get_db_connection():
-    conn = sqlite3.connect("pocket_bot.db", check_same_thread=False)
+    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
+def execute_query(query, params=(), fetchone=False, fetchall=False, commit=False):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        if commit:
+            conn.commit()
+
+        if fetchone:
+            return cursor.fetchone()
+        if fetchall:
+            return cursor.fetchall()
+        return None
+    except Exception as e:
+        print("Ошибка SQL:", e)
+        print("QUERY:", query)
+        print("PARAMS:", params)
+        return None
+    finally:
+        cursor.close()
+        conn.close()
 
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-
     try:
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -103,9 +125,6 @@ def init_db():
             balance REAL DEFAULT 0,
             signals_count INTEGER DEFAULT 0,
             last_signal_date TEXT,
-            preferred_assets TEXT DEFAULT '',
-            trading_experience TEXT DEFAULT '',
-            risk_level TEXT DEFAULT 'medium',
             preferred_timeframe TEXT DEFAULT ''
         )
         """)
@@ -115,9 +134,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             referrer_id INTEGER,
             referred_id INTEGER,
-            registration_date TEXT,
-            FOREIGN KEY (referrer_id) REFERENCES users(telegram_id),
-            FOREIGN KEY (referred_id) REFERENCES users(telegram_id)
+            registration_date TEXT
         )
         """)
 
@@ -130,8 +147,7 @@ def init_db():
             direction TEXT,
             timeframe TEXT,
             confidence INTEGER,
-            result TEXT DEFAULT 'PENDING',
-            FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+            result TEXT DEFAULT 'PENDING'
         )
         """)
 
@@ -146,70 +162,11 @@ def init_db():
             admin_id INTEGER
         )
         """)
-
         conn.commit()
-        print("✅ База данных инициализирована")
-        update_database_structure(conn)
-
-    except Exception as e:
-        print(f"⚠️ Ошибка при инициализации БД: {e}")
+        print("✅ База инициализирована")
     finally:
         cursor.close()
         conn.close()
-
-
-def update_database_structure(conn):
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(users)")
-    existing_columns = [column[1] for column in cursor.fetchall()]
-
-    required_columns = [
-        ("preferred_assets", "TEXT DEFAULT ''"),
-        ("trading_experience", "TEXT DEFAULT ''"),
-        ("risk_level", "TEXT DEFAULT 'medium'"),
-        ("preferred_timeframe", "TEXT DEFAULT ''")
-    ]
-
-    for column_name, column_type in required_columns:
-        if column_name not in existing_columns:
-            try:
-                cursor.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
-                print(f"✅ Колонка {column_name} добавлена")
-            except Exception as e:
-                print(f"⚠️ Ошибка при добавлении колонки {column_name}: {e}")
-
-    conn.commit()
-    cursor.close()
-
-
-init_db()
-
-
-def execute_query(query, params=(), fetchone=False, fetchall=False, commit=False):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(query, params)
-        if commit:
-            conn.commit()
-
-        if fetchone:
-            result = cursor.fetchone()
-        elif fetchall:
-            result = cursor.fetchall()
-        else:
-            result = None
-
-        return result
-    except Exception as e:
-        print(f"Ошибка выполнения запроса: {e}")
-        print(f"Запрос: {query}")
-        print(f"Параметры: {params}")
-        return None
-    finally:
-        cursor.close()
-        conn.close()
-
 
 def get_user(telegram_id):
     return execute_query(
@@ -218,56 +175,44 @@ def get_user(telegram_id):
         fetchone=True
     )
 
-
 def add_user(telegram_id, username, first_name, join_date):
-    return execute_query(
+    execute_query(
         """INSERT OR IGNORE INTO users (telegram_id, username, first_name, join_date)
            VALUES (?, ?, ?, ?)""",
         (telegram_id, username, first_name, join_date),
         commit=True
     )
 
-
 def ensure_owner_access():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE users SET is_verified = 1 WHERE telegram_id = ?", (ADMIN_ID,))
-        cursor.execute("DELETE FROM verification_requests WHERE user_id = ?", (ADMIN_ID,))
-        conn.commit()
-        print("👑 Доступ владельца гарантирован")
-    except Exception as e:
-        print(f"⚠️ Ошибка при обеспечении доступа владельца: {e}")
-    finally:
-        cursor.close()
-        conn.close()
+    execute_query(
+        """INSERT OR IGNORE INTO users (telegram_id, username, first_name, join_date, is_verified)
+           VALUES (?, ?, ?, ?, 1)""",
+        (ADMIN_ID, "", "Admin", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        commit=True
+    )
+    execute_query(
+        "UPDATE users SET is_verified = 1 WHERE telegram_id = ?",
+        (ADMIN_ID,),
+        commit=True
+    )
+    print("👑 Доступ владельца гарантирован")
 
-
+init_db()
 ensure_owner_access()
 
-
 # ========== ВСПОМОГАТЕЛЬНОЕ ==========
-def admin_can_receive_messages():
-    try:
-        bot.send_chat_action(ADMIN_ID, "typing")
-        return True
-    except Exception as e:
-        print(f"⚠️ Бот не может написать админу {ADMIN_ID}: {e}")
-        return False
-
+def username_text(username):
+    return f"@{username}" if username else "нет"
 
 def notify_admin_verification_request(user, pocket_id):
     try:
-        user_data = get_user(user.id)
-        user_dict = dict(user_data) if user_data else {}
-
         admin_message = f"""
 🆕 **НОВЫЙ ЗАПРОС НА ВЕРИФИКАЦИЮ**
 
 👤 **Пользователь:**
 ├ ID: `{user.id}`
-├ Имя: {user_dict.get('first_name', user.first_name)}
-├ Username: @{user.username if user.username else 'нет'}
+├ Имя: {user.first_name}
+├ Username: {username_text(user.username)}
 └ Pocket ID: {pocket_id}
 
 📅 **Время запроса:** {datetime.now().strftime("%H:%M %d.%m.%Y")}
@@ -280,37 +225,52 @@ def notify_admin_verification_request(user, pocket_id):
         )
 
         bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown", reply_markup=markup)
-        print(f"✅ Заявка на верификацию отправлена админу: {user.id}")
+        print(f"✅ Заявка отправлена админу: {user.id}")
         return True
-
     except Exception as e:
-        print(f"❌ Ошибка отправки заявки админу: {e}")
+        print(f"❌ Ошибка отправки админу: {e}")
         traceback.print_exc()
         return False
-
 
 def send_signal_photo(chat_id, direction):
     try:
         if direction == "BUY":
             image_path = BUY_IMAGE_PATH
-            caption = "🟢 Сигнал: ПОКУПКА (CALL)"
+            caption = "🟢 ПОКУПКА (CALL)"
         elif direction == "SELL":
             image_path = SELL_IMAGE_PATH
-            caption = "🔴 Сигнал: ПРОДАЖА (PUT)"
+            caption = "🔴 ПРОДАЖА (PUT)"
         else:
             return
 
         if not os.path.exists(image_path):
-            print(f"⚠️ Файл изображения не найден: {image_path}")
+            print(f"⚠️ Картинка не найдена: {image_path}")
             return
 
         with open(image_path, "rb") as photo:
             bot.send_photo(chat_id, photo, caption=caption)
-
     except Exception as e:
-        print(f"⚠️ Ошибка при отправке фото сигнала: {e}")
+        print(f"❌ Ошибка отправки фото: {e}")
         traceback.print_exc()
 
+def check_user_access(user_id, username, first_name):
+    if user_id == ADMIN_ID:
+        add_user(user_id, username, first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        execute_query(
+            "UPDATE users SET is_verified = 1 WHERE telegram_id = ?",
+            (user_id,),
+            commit=True
+        )
+        return True, "owner"
+
+    user_data = get_user(user_id)
+    if not user_data:
+        return False, "not_registered"
+
+    if dict(user_data).get("is_verified", 0) == 1:
+        return True, "verified"
+
+    return False, "not_verified"
 
 # ========== АНАЛИЗАТОР ==========
 class MarketAnalyzer:
@@ -499,7 +459,6 @@ class MarketAnalyzer:
 
     def _fetch_yahoo_ohlcv(self, ticker, timeframe):
         period, interval = self.yahoo_timeframes.get(timeframe, ("5d", "5m"))
-
         df = yf.download(
             ticker,
             period=period,
@@ -515,8 +474,6 @@ class MarketAnalyzer:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [col[0] for col in df.columns]
 
-        df = df.loc[:, ~df.columns.duplicated()].copy()
-
         if "Adj Close" in df.columns:
             df = df.drop(columns=["Adj Close"])
 
@@ -529,16 +486,8 @@ class MarketAnalyzer:
         }
 
         df = df.rename(columns=rename_map)
-        df = df.loc[:, ~df.columns.duplicated()].copy()
-
         required = ["open", "high", "low", "close", "volume"]
-        missing = [col for col in required if col not in df.columns]
-
-        if missing:
-            raise ValueError(f"В данных {ticker} нет колонок: {missing}")
-
-        df = df[required].copy()
-        df = df.dropna()
+        df = df[required].dropna()
 
         if df.empty:
             raise ValueError(f"Пустые данные по тикеру {ticker}")
@@ -555,14 +504,14 @@ class MarketAnalyzer:
             if proxy_type == "crypto":
                 symbol = self.supported_crypto.get(proxy_asset)
                 if not symbol:
-                    raise ValueError(f"Нет proxy-маппинга для OTC актива {asset}")
+                    raise ValueError(f"Нет proxy для OTC актива {asset}")
                 return self._fetch_binance_ohlcv(symbol, timeframe), proxy_asset
 
             ticker = self.yahoo_map.get(proxy_asset)
             if ticker:
                 return self._fetch_yahoo_ohlcv(ticker, timeframe), proxy_asset
 
-            raise ValueError(f"Нет proxy-маппинга для OTC актива {asset}")
+            raise ValueError(f"Нет proxy для OTC актива {asset}")
 
         if asset_type == "crypto":
             symbol = self.supported_crypto.get(asset)
@@ -579,7 +528,6 @@ class MarketAnalyzer:
     def analyze_market(self, asset=None, timeframe=None):
         if not asset:
             asset = random.choice(ALL_ASSETS)
-
         if not timeframe:
             timeframe = random.choice(TIMEFRAMES)
 
@@ -598,7 +546,7 @@ class MarketAnalyzer:
                 "pattern": "no_data",
                 "asset_type": asset_type,
                 "price_action": str(e),
-                "indicators": "Недостаточно рыночных данных",
+                "indicators": "Недостаточно данных",
                 "volatility": "Неизвестно",
                 "volume": "Неизвестно",
                 "unavailable": True,
@@ -616,7 +564,7 @@ class MarketAnalyzer:
                 "risk_level": "unknown",
                 "pattern": "insufficient_history",
                 "asset_type": asset_type,
-                "price_action": "Недостаточно истории для анализа",
+                "price_action": "Недостаточно истории",
                 "indicators": "Недостаточно данных",
                 "volatility": "Неизвестно",
                 "volume": "Неизвестно",
@@ -681,25 +629,25 @@ class MarketAnalyzer:
 
         if last_macd_hist > 0:
             score += 1
-            reasons.append("MACD histogram выше нуля")
+            reasons.append("MACD выше нуля")
         else:
             score -= 1
-            reasons.append("MACD histogram ниже нуля")
+            reasons.append("MACD ниже нуля")
 
         if last_close >= recent_high * 0.998:
             score += 1
-            reasons.append("цена у локального пробоя вверх")
+            reasons.append("локальный пробой вверх")
         elif last_close <= recent_low * 1.002:
             score -= 1
-            reasons.append("цена у локального пробоя вниз")
+            reasons.append("локальный пробой вниз")
 
         if last_volume > avg_volume * 1.2:
             if score > 0:
                 score += 1
-                reasons.append("рост объема поддерживает движение вверх")
+                reasons.append("объем подтверждает рост")
             elif score < 0:
                 score -= 1
-                reasons.append("рост объема поддерживает движение вниз")
+                reasons.append("объем подтверждает падение")
 
         atr_pct = (last_atr / last_close) * 100 if last_close else 0
         if atr_pct > 2:
@@ -763,201 +711,85 @@ class MarketAnalyzer:
             "source_asset": source_asset
         }
 
-
 neural_net = MarketAnalyzer()
-
-
-# ========== ДОСТУП ==========
-def check_user_access(user_id, username, first_name):
-    if user_id == ADMIN_ID:
-        execute_query(
-            "UPDATE users SET is_verified = 1 WHERE telegram_id = ?",
-            (user_id,),
-            commit=True
-        )
-        execute_query(
-            "DELETE FROM verification_requests WHERE user_id = ?",
-            (user_id,),
-            commit=True
-        )
-        execute_query(
-            """INSERT OR IGNORE INTO users
-               (telegram_id, username, first_name, join_date, is_verified)
-               VALUES (?, ?, ?, ?, 1)""",
-            (user_id, username, first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            commit=True
-        )
-        return True, "owner"
-
-    user_data = get_user(user_id)
-    if not user_data:
-        return False, "not_registered"
-
-    user_dict = dict(user_data)
-    if user_dict.get("is_verified", 0) == 1:
-        return True, "verified"
-
-    return False, "not_verified"
-
 
 # ========== МЕНЮ ==========
 def create_main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton("📈 Случайный сигнал")
-    btn2 = types.KeyboardButton("🎯 Сигнал по активу")
-    btn3 = types.KeyboardButton("⚙️ Настройки")
-    btn4 = types.KeyboardButton("📊 Моя статистика")
-    btn5 = types.KeyboardButton("👥 Рефералы")
-    btn6 = types.KeyboardButton("ℹ️ Помощь")
-    btn7 = types.KeyboardButton("🔐 Регистрация")
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    markup.add(
+        types.KeyboardButton("📈 Случайный сигнал"),
+        types.KeyboardButton("🎯 Сигнал по активу"),
+        types.KeyboardButton("⚙️ Настройки"),
+        types.KeyboardButton("📊 Моя статистика"),
+        types.KeyboardButton("👥 Рефералы"),
+        types.KeyboardButton("ℹ️ Помощь"),
+        types.KeyboardButton("🔐 Регистрация")
+    )
     return markup
-
 
 def create_settings_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton("⏱️ Выбрать время")
-    btn2 = types.KeyboardButton("🔙 Назад")
-    markup.add(btn1, btn2)
+    markup.add(types.KeyboardButton("⏱️ Выбрать время"), types.KeyboardButton("🔙 Назад"))
     return markup
-
 
 def create_assets_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_crypto = types.InlineKeyboardButton("💰 Криптовалюты (40+)", callback_data="category_crypto")
-    btn_forex = types.InlineKeyboardButton("💱 Форекс (28+)", callback_data="category_forex")
-    btn_commodities = types.InlineKeyboardButton("🛢️ Сырье (16+)", callback_data="category_commodities")
-    btn_indices = types.InlineKeyboardButton("📊 Индексы (15+)", callback_data="category_indices")
-    btn_otc = types.InlineKeyboardButton("📊 Крипто OTC (40+)", callback_data="category_otc")
-    markup.add(btn_crypto, btn_forex)
-    markup.add(btn_commodities, btn_indices)
-    markup.add(btn_otc)
+    markup.add(
+        types.InlineKeyboardButton("💰 Криптовалюты", callback_data="category_crypto"),
+        types.InlineKeyboardButton("💱 Форекс", callback_data="category_forex"),
+        types.InlineKeyboardButton("🛢️ Сырье", callback_data="category_commodities"),
+        types.InlineKeyboardButton("📊 Индексы", callback_data="category_indices"),
+        types.InlineKeyboardButton("📊 OTC", callback_data="category_otc"),
+    )
     return markup
-
 
 def create_timeframe_menu():
     markup = types.InlineKeyboardMarkup(row_width=2)
-
-    for i in range(0, len(TIMEFRAMES), 2):
-        if i + 1 < len(TIMEFRAMES):
-            btn1 = types.InlineKeyboardButton(TIMEFRAMES[i], callback_data=f"timeframe_{TIMEFRAMES[i]}")
-            btn2 = types.InlineKeyboardButton(TIMEFRAMES[i + 1], callback_data=f"timeframe_{TIMEFRAMES[i + 1]}")
-            markup.add(btn1, btn2)
-        else:
-            btn = types.InlineKeyboardButton(TIMEFRAMES[i], callback_data=f"timeframe_{TIMEFRAMES[i]}")
-            markup.add(btn)
-
-    btn_random = types.InlineKeyboardButton("🎲 Случайное время", callback_data="timeframe_random")
-    btn_cancel = types.InlineKeyboardButton("❌ Отмена", callback_data="timeframe_cancel")
-    markup.add(btn_random, btn_cancel)
+    for tf in TIMEFRAMES:
+        markup.add(types.InlineKeyboardButton(tf, callback_data=f"timeframe_{tf}"))
+    markup.add(
+        types.InlineKeyboardButton("🎲 Случайное время", callback_data="timeframe_random"),
+        types.InlineKeyboardButton("❌ Отмена", callback_data="timeframe_cancel")
+    )
     return markup
 
+def paged_menu(items, prefix, page=1, title_back="back_to_categories"):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    items_per_page = 20
+    start_idx = (page - 1) * items_per_page
+    end_idx = min(start_idx + items_per_page, len(items))
+
+    for i in range(start_idx, end_idx, 2):
+        row = [types.InlineKeyboardButton(items[i], callback_data=f"asset_{items[i]}")]
+        if i + 1 < end_idx:
+            row.append(types.InlineKeyboardButton(items[i + 1], callback_data=f"asset_{items[i + 1]}"))
+        markup.add(*row)
+
+    nav = []
+    if page > 1:
+        nav.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"{prefix}_page_{page - 1}"))
+    if end_idx < len(items):
+        nav.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"{prefix}_page_{page + 1}"))
+    if nav:
+        markup.add(*nav)
+
+    markup.add(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data=title_back))
+    return markup
 
 def create_crypto_menu(page=1):
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    items_per_page = 20
-    start_idx = (page - 1) * items_per_page
-    end_idx = min(start_idx + items_per_page, len(CRYPTO_ASSETS))
-
-    for i in range(start_idx, end_idx, 2):
-        if i + 1 < end_idx:
-            btn1 = types.InlineKeyboardButton(CRYPTO_ASSETS[i], callback_data=f"asset_{CRYPTO_ASSETS[i]}")
-            btn2 = types.InlineKeyboardButton(CRYPTO_ASSETS[i + 1], callback_data=f"asset_{CRYPTO_ASSETS[i + 1]}")
-            markup.add(btn1, btn2)
-        else:
-            btn = types.InlineKeyboardButton(CRYPTO_ASSETS[i], callback_data=f"asset_{CRYPTO_ASSETS[i]}")
-            markup.add(btn)
-
-    navigation_buttons = []
-
-    if page > 1:
-        navigation_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"crypto_page_{page - 1}"))
-    if end_idx < len(CRYPTO_ASSETS):
-        navigation_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"crypto_page_{page + 1}"))
-
-    if navigation_buttons:
-        markup.add(*navigation_buttons)
-
-    markup.add(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="back_to_categories"))
-    return markup
-
+    return paged_menu(CRYPTO_ASSETS, "crypto", page)
 
 def create_forex_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-
-    for i in range(0, len(FOREX_ASSETS), 2):
-        if i + 1 < len(FOREX_ASSETS):
-            btn1 = types.InlineKeyboardButton(FOREX_ASSETS[i], callback_data=f"asset_{FOREX_ASSETS[i]}")
-            btn2 = types.InlineKeyboardButton(FOREX_ASSETS[i + 1], callback_data=f"asset_{FOREX_ASSETS[i + 1]}")
-            markup.add(btn1, btn2)
-        else:
-            btn = types.InlineKeyboardButton(FOREX_ASSETS[i], callback_data=f"asset_{FOREX_ASSETS[i]}")
-            markup.add(btn)
-
-    markup.add(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="back_to_categories"))
-    return markup
-
+    return paged_menu(FOREX_ASSETS, "forex", 1)
 
 def create_commodities_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-
-    for i in range(0, len(COMMODITIES_ASSETS), 2):
-        if i + 1 < len(COMMODITIES_ASSETS):
-            btn1 = types.InlineKeyboardButton(COMMODITIES_ASSETS[i], callback_data=f"asset_{COMMODITIES_ASSETS[i]}")
-            btn2 = types.InlineKeyboardButton(COMMODITIES_ASSETS[i + 1], callback_data=f"asset_{COMMODITIES_ASSETS[i + 1]}")
-            markup.add(btn1, btn2)
-        else:
-            btn = types.InlineKeyboardButton(COMMODITIES_ASSETS[i], callback_data=f"asset_{COMMODITIES_ASSETS[i]}")
-            markup.add(btn)
-
-    markup.add(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="back_to_categories"))
-    return markup
-
+    return paged_menu(COMMODITIES_ASSETS, "commodities", 1)
 
 def create_indices_menu():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-
-    for i in range(0, len(INDICES_ASSETS), 2):
-        if i + 1 < len(INDICES_ASSETS):
-            btn1 = types.InlineKeyboardButton(INDICES_ASSETS[i], callback_data=f"asset_{INDICES_ASSETS[i]}")
-            btn2 = types.InlineKeyboardButton(INDICES_ASSETS[i + 1], callback_data=f"asset_{INDICES_ASSETS[i + 1]}")
-            markup.add(btn1, btn2)
-        else:
-            btn = types.InlineKeyboardButton(INDICES_ASSETS[i], callback_data=f"asset_{INDICES_ASSETS[i]}")
-            markup.add(btn)
-
-    markup.add(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="back_to_categories"))
-    return markup
-
+    return paged_menu(INDICES_ASSETS, "indices", 1)
 
 def create_otc_menu(page=1):
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    items_per_page = 20
-    start_idx = (page - 1) * items_per_page
-    end_idx = min(start_idx + items_per_page, len(OTC_ASSETS))
-
-    for i in range(start_idx, end_idx, 2):
-        if i + 1 < end_idx:
-            btn1 = types.InlineKeyboardButton(OTC_ASSETS[i], callback_data=f"asset_{OTC_ASSETS[i]}")
-            btn2 = types.InlineKeyboardButton(OTC_ASSETS[i + 1], callback_data=f"asset_{OTC_ASSETS[i + 1]}")
-            markup.add(btn1, btn2)
-        else:
-            btn = types.InlineKeyboardButton(OTC_ASSETS[i], callback_data=f"asset_{OTC_ASSETS[i]}")
-            markup.add(btn)
-
-    navigation_buttons = []
-
-    if page > 1:
-        navigation_buttons.append(types.InlineKeyboardButton("◀️ Назад", callback_data=f"otc_page_{page - 1}"))
-    if end_idx < len(OTC_ASSETS):
-        navigation_buttons.append(types.InlineKeyboardButton("Вперед ▶️", callback_data=f"otc_page_{page + 1}"))
-
-    if navigation_buttons:
-        markup.add(*navigation_buttons)
-
-    markup.add(types.InlineKeyboardButton("🔙 Назад к категориям", callback_data="back_to_categories"))
-    return markup
-
+    return paged_menu(OTC_ASSETS, "otc", page)
 
 # ========== СИГНАЛЫ ==========
 def format_signal_message(signal_data, selected_asset=None, asset_source="🎲 Случайный актив"):
@@ -983,7 +815,6 @@ def format_signal_message(signal_data, selected_asset=None, asset_source="🎲 �
     }.get(signal_data["asset_type"], "📊")
 
     selected_line = f"🎯 **Выбранный актив:** {selected_asset}\n" if selected_asset else ""
-
     proxy_note = ""
     if signal_data.get("is_otc_proxy"):
         proxy_note = f"📌 **OTC proxy-анализ:** расчёт выполнен по {signal_data.get('source_asset', signal_data['asset'])}\n"
@@ -1005,18 +836,10 @@ def format_signal_message(signal_data, selected_asset=None, asset_source="🎲 �
 • Индикаторы: {signal_data['indicators']}
 • Волатильность: {signal_data['volatility']}
 • Объем: {signal_data['volume']}
-• Основано на EMA / RSI / MACD / ATR / объеме
-
-📈 **АНАЛИТИЧЕСКИЙ ВЫВОД:**
-1. Направление рассчитано по теханализу
-2. Таймфрейм анализа: {signal_data['timeframe']}
-3. Слабые сигналы лучше пропускать
-4. Не используйте крупный риск на одну сделку
 
 🕐 **СИГНАЛ АКТУАЛЕН:** 1-3 минуты
 📅 **ВРЕМЯ:** {datetime.now().strftime("%H:%M %d.%m.%Y")}
 """
-
 
 def store_signal(user_id, signal_data):
     execute_query(
@@ -1039,7 +862,6 @@ def store_signal(user_id, signal_data):
         commit=True
     )
 
-
 def generate_signal(message, asset=None, random_asset=False, timeframe=None):
     try:
         user = message.from_user
@@ -1047,11 +869,7 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
 
         if not access:
             if status == "not_registered":
-                bot.send_message(
-                    message.chat.id,
-                    "❌ Вы не зарегистрированы. Нажмите '🔐 Регистрация'",
-                    reply_markup=create_main_menu()
-                )
+                bot.send_message(message.chat.id, "❌ Вы не зарегистрированы. Нажмите '🔐 Регистрация'", reply_markup=create_main_menu())
                 return
 
             verification = execute_query(
@@ -1068,11 +886,11 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
                 elif ver_status == "REJECTED":
                     status_msg = "❌ Ваша заявка отклонена администратором"
                 elif ver_status == "APPROVED":
-                    status_msg = "✅ Ваша заявка одобрена (используйте /fix для активации)"
+                    status_msg = "✅ Ваша заявка одобрена"
 
             bot.send_message(
                 message.chat.id,
-                f"🔒 **ДОСТУП ЗАКРЫТ!**\n\n{status_msg}\n\n📌 Для получения сигналов необходимо подтверждение аккаунта администратором.",
+                f"🔒 **ДОСТУП ЗАКРЫТ!**\n\n{status_msg}\n\n📌 Для получения сигналов нужно подтверждение администратора.",
                 parse_mode="Markdown",
                 reply_markup=create_main_menu()
             )
@@ -1080,11 +898,7 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
 
         user_data = get_user(user.id)
         if not user_data:
-            bot.send_message(
-                message.chat.id,
-                "❌ Ошибка доступа. Попробуйте снова.",
-                reply_markup=create_main_menu()
-            )
+            bot.send_message(message.chat.id, "❌ Ошибка доступа. Попробуйте снова.", reply_markup=create_main_menu())
             return
 
         user_dict = dict(user_data)
@@ -1093,7 +907,7 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
             if preferred_timeframe:
                 timeframe = preferred_timeframe
 
-        bot.send_message(message.chat.id, "🧠 Анализирую рынок по свечам...")
+        bot.send_message(message.chat.id, "🧠 Анализирую рынок...")
         time.sleep(1)
 
         if asset:
@@ -1109,9 +923,7 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
         if signal_data.get("unavailable"):
             bot.send_message(
                 message.chat.id,
-                f"⚠️ По активу **{signal_data['asset']}** сейчас нельзя построить сигнал.\n\n"
-                f"Причина: {signal_data['price_action']}\n\n"
-                f"Попробуйте другой актив или другой таймфрейм.",
+                f"⚠️ По активу **{signal_data['asset']}** сейчас нельзя построить сигнал.\n\nПричина: {signal_data['price_action']}",
                 parse_mode="Markdown",
                 reply_markup=create_main_menu()
             )
@@ -1126,24 +938,18 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
         bot.send_message(message.chat.id, "🚀 Быстрый переход для торговли:", reply_markup=markup)
-        bot.send_message(message.chat.id, "👇 Используйте меню для дальнейших действий:", reply_markup=create_main_menu())
+        bot.send_message(message.chat.id, "👇 Используйте меню:", reply_markup=create_main_menu())
 
     except Exception:
         print("Ошибка в generate_signal:")
         traceback.print_exc()
-        bot.send_message(
-            message.chat.id,
-            "❌ Произошла ошибка при генерации сигнала. Попробуйте позже.",
-            reply_markup=create_main_menu()
-        )
-
+        bot.send_message(message.chat.id, "❌ Ошибка при генерации сигнала.", reply_markup=create_main_menu())
 
 # ========== ОБРАБОТЧИКИ ==========
 @bot.message_handler(commands=["start"])
 def start_command(message):
     try:
         user = message.from_user
-
         add_user(user.id, user.username, user.first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
         if len(message.text) > 7:
@@ -1166,47 +972,26 @@ def start_command(message):
         welcome_text = f"""
 🎯 ДОБРО ПОЖАЛОВАТЬ, {user.first_name}!
 
-🤖 Я - бот с аналитическими сигналами для бинарных опционов.
+🤖 Я бот с сигналами.
 
-📊 **Возможности бота:**
-• 📈 Рыночные сигналы (без лимитов!)
+📊 **Возможности:**
+• 📈 Рыночные сигналы
 • 🧠 Анализ по свечам и индикаторам
-• 📊 Крипто OTC активы через proxy-анализ
-• 👥 Реферальная система
-• ⏱️ Настройка времени экспирации
-
-🚀 **Для начала работы:**
-1. Пройдите регистрацию
-2. Выберите предпочтительное время
-3. Получайте сигналы
+• 📊 OTC через proxy-анализ
+• 👥 Рефералы
+• ⏱️ Настройка времени
 
 📊 **Всего активов: {len(ALL_ASSETS)}+**
-
-👇 **Используйте меню ниже для навигации:**
 """
-
-        bot.send_message(
-            message.chat.id,
-            welcome_text,
-            parse_mode="Markdown",
-            reply_markup=create_main_menu()
-        )
-
-        if message.from_user.id == ADMIN_ID:
-            bot.send_message(
-                message.chat.id,
-                "👑 Админ-чат активирован. Теперь бот может присылать вам заявки на верификацию."
-            )
+        bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=create_main_menu())
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка. Попробуйте еще раз.")
-
+        bot.send_message(message.chat.id, "❌ Ошибка. Попробуйте ещё раз.")
 
 @bot.message_handler(func=lambda message: message.text == "📈 Случайный сигнал")
 def random_signal_handler(message):
     generate_signal(message, random_asset=True)
-
 
 @bot.message_handler(func=lambda message: message.text == "🎯 Сигнал по активу")
 def choose_asset_signal_handler(message):
@@ -1216,73 +1001,42 @@ def choose_asset_signal_handler(message):
 
         if not access:
             if status == "not_registered":
-                bot.send_message(
-                    message.chat.id,
-                    "❌ Вы не зарегистрированы. Нажмите '🔐 Регистрация'",
-                    reply_markup=create_main_menu()
-                )
+                bot.send_message(message.chat.id, "❌ Вы не зарегистрированы. Нажмите '🔐 Регистрация'", reply_markup=create_main_menu())
                 return
-
-            verification = execute_query(
-                "SELECT status FROM verification_requests WHERE user_id = ? ORDER BY request_date DESC LIMIT 1",
-                (user.id,),
-                fetchone=True
-            )
-
-            status_msg = ""
-            if verification:
-                ver_status = dict(verification).get("status", "PENDING")
-                if ver_status == "PENDING":
-                    status_msg = "⏳ Ваша заявка на проверке у администратора"
-                elif ver_status == "REJECTED":
-                    status_msg = "❌ Ваша заявка отклонена администратором"
-                elif ver_status == "APPROVED":
-                    status_msg = "✅ Ваша заявка одобрена (используйте /fix для активации)"
 
             bot.send_message(
                 message.chat.id,
-                f"🔒 **ДОСТУП ЗАКРЫТ!**\n\n{status_msg}\n\n📌 Для получения сигналов необходимо подтверждение аккаунта администратором.",
-                parse_mode="Markdown",
+                "🔒 Доступ закрыт. Сначала пройдите верификацию.",
                 reply_markup=create_main_menu()
             )
             return
 
         bot.send_message(
             message.chat.id,
-            f"🎯 **Выберите категорию актива:**\n\n📊 Всего активов: {len(ALL_ASSETS)}+\n📈 Нажмите на актив для получения сигнала",
+            f"🎯 **Выберите категорию актива:**\n\n📊 Всего активов: {len(ALL_ASSETS)}+",
             parse_mode="Markdown",
             reply_markup=create_assets_menu()
         )
-
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка. Попробуйте позже.", reply_markup=create_main_menu())
-
+        bot.send_message(message.chat.id, "❌ Ошибка. Попробуйте позже.", reply_markup=create_main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "⚙️ Настройки")
 def settings_handler(message):
-    bot.send_message(
-        message.chat.id,
-        "⚙️ **НАСТРОЙКИ БОТА**\n\nВыберите опцию:",
-        parse_mode="Markdown",
-        reply_markup=create_settings_menu()
-    )
-
+    bot.send_message(message.chat.id, "⚙️ **НАСТРОЙКИ**", parse_mode="Markdown", reply_markup=create_settings_menu())
 
 @bot.message_handler(func=lambda message: message.text == "🔙 Назад")
 def back_handler(message):
-    bot.send_message(message.chat.id, "🔙 Возвращаемся в главное меню", reply_markup=create_main_menu())
-
+    bot.send_message(message.chat.id, "🔙 Главное меню", reply_markup=create_main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "⏱️ Выбрать время")
 def choose_timeframe_handler(message):
     bot.send_message(
         message.chat.id,
-        "⏱️ **Выберите время экспирации:**\n\nЭто время будет использоваться для ваших сигналов",
+        "⏱️ **Выберите время экспирации:**",
         parse_mode="Markdown",
         reply_markup=create_timeframe_menu()
     )
-
 
 @bot.message_handler(func=lambda message: message.text == "🔐 Регистрация")
 def registration_handler(message):
@@ -1291,13 +1045,9 @@ def registration_handler(message):
 
         if user.id == ADMIN_ID:
             execute_query("UPDATE users SET is_verified = 1 WHERE telegram_id = ?", (user.id,), commit=True)
-            execute_query("DELETE FROM verification_requests WHERE user_id = ?", (user.id,), commit=True)
-            add_user(user.id, user.username, user.first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
             bot.send_message(
                 message.chat.id,
-                "👑 **ВЫ - ВЛАДЕЛЕЦ БОТА!**\n\n✅ Вы имеете полный доступ ко всем функциям без верификации.\n📊 Начинайте получать сигналы!",
-                parse_mode="Markdown",
+                "👑 Вы владелец бота. Полный доступ уже открыт.",
                 reply_markup=create_main_menu()
             )
             return
@@ -1306,37 +1056,27 @@ def registration_handler(message):
         is_verified = dict(user_data).get("is_verified", 0) if user_data else 0
 
         if is_verified == 1:
-            bot.send_message(
-                message.chat.id,
-                "✅ Вы уже верифицированы и имеете доступ к сигналам!",
-                reply_markup=create_main_menu()
-            )
+            bot.send_message(message.chat.id, "✅ Вы уже верифицированы.", reply_markup=create_main_menu())
             return
 
         registration_text = f"""
-📝 **РЕГИСТРАЦИЯ В POCKET OPTION**
+📝 **РЕГИСТРАЦИЯ**
 
-Для получения доступа к сигналам:
-
-1️⃣ **Зарегистрируйтесь по ссылке:**
+1️⃣ Зарегистрируйтесь:
 👉 {POCKET_REFERRAL_LINK}
 
-2️⃣ **После регистрации найдите ваш ID:**
-   • Откройте личный кабинет
-   • ID обычно в настройках профиля
-   • Или в разделе "Рефералы"
+2️⃣ Найдите ваш Pocket ID
 
-3️⃣ **Отправьте мне ваш Pocket Option ID (только цифры)**
+3️⃣ Отправьте сюда ваш Pocket ID (только цифры)
 
-4️⃣ **Ожидайте проверки администратором**
+4️⃣ Ждите проверки администратора
 """
         msg = bot.send_message(message.chat.id, registration_text, parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_pocket_id)
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка. Попробуйте еще раз.")
-
+        bot.send_message(message.chat.id, "❌ Ошибка. Попробуйте ещё раз.")
 
 def process_pocket_id(message):
     try:
@@ -1346,7 +1086,7 @@ def process_pocket_id(message):
         if not pocket_id.isdigit():
             bot.send_message(
                 message.chat.id,
-                "❌ ID должен содержать только цифры. Попробуйте снова.",
+                "❌ ID должен содержать только цифры.",
                 reply_markup=create_main_menu()
             )
             return
@@ -1362,12 +1102,7 @@ def process_pocket_id(message):
                 (user.id,),
                 commit=True
             )
-            bot.send_message(
-                user.id,
-                "✅ Ваш Pocket ID сохранен!\n\n👑 **Как владелец бота, вы имеете доступ к сигналам без верификации!**",
-                parse_mode="Markdown",
-                reply_markup=create_main_menu()
-            )
+            bot.send_message(user.id, "✅ Pocket ID сохранён.", reply_markup=create_main_menu())
             return
 
         execute_query(
@@ -1388,20 +1123,19 @@ def process_pocket_id(message):
         if admin_sent:
             bot.send_message(
                 user.id,
-                "✅ Ваш запрос на верификацию отправлен администратору!\n\n⏳ Ожидайте проверки.",
+                "✅ Запрос на верификацию отправлен администратору.\n\n⏳ Ожидайте проверки.",
                 reply_markup=create_main_menu()
             )
         else:
             bot.send_message(
                 user.id,
-                "✅ Ваш запрос сохранен, но возникла проблема с отправкой уведомления администратору.\n\n⏳ Заявка осталась в базе, администратор сможет проверить её через /verify_pending.",
+                "✅ Заявка сохранена, но уведомление админу не ушло.\n\nАдмин сможет посмотреть её через /verify_pending.",
                 reply_markup=create_main_menu()
             )
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка. Попробуйте снова.", reply_markup=create_main_menu())
-
+        bot.send_message(message.chat.id, "❌ Ошибка. Попробуйте снова.", reply_markup=create_main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "📊 Моя статистика")
 def mystats_command(message):
@@ -1416,23 +1150,15 @@ def mystats_command(message):
                 execute_query('SELECT COUNT(*) as count FROM verification_requests WHERE status = "PENDING"', fetchone=True) or {}
             ).get("count", 0)
 
-            owner_stats = f"""
+            text = f"""
 👑 **СТАТИСТИКА ВЛАДЕЛЬЦА**
 
-📊 **ОБЩАЯ СТАТИСТИКА БОТА:**
 ├ Всего пользователей: {total_users}
 ├ Верифицировано: {verified_users}
-├ Ожидают верификации: {pending_verifications}
+├ На проверке: {pending_verifications}
 └ Выдано сигналов: {total_signals}
-
-🔗 **ВАША РЕФЕРАЛЬНАЯ ССЫЛКА:**
-{POCKET_REFERRAL_LINK}
-
-📋 **КОМАНДЫ ДЛЯ АДМИНА:**
-/verify_pending - Показать ожидающие верификации
-/admin - Детальная статистика
 """
-            bot.send_message(message.chat.id, owner_stats, parse_mode="Markdown")
+            bot.send_message(message.chat.id, text, parse_mode="Markdown")
             return
 
         user_data = execute_query(
@@ -1445,96 +1171,36 @@ def mystats_command(message):
         )
 
         if not user_data:
-            bot.send_message(
-                message.chat.id,
-                "❌ Вы не зарегистрированы. Используйте /start",
-                reply_markup=create_main_menu()
-            )
+            bot.send_message(message.chat.id, "❌ Вы не зарегистрированы. Используйте /start", reply_markup=create_main_menu())
             return
 
         user_dict = dict(user_data)
-        is_verified = user_dict.get("is_verified", 0)
-        signals_count = user_dict.get("signals_count", 0)
-        balance = user_dict.get("balance", 0)
-        join_date = user_dict.get("join_date", "Неизвестно")
-        pocket_id = user_dict.get("pocket_id", "не указан")
-        ref_count = user_dict.get("ref_count", 0)
-        preferred_timeframe = user_dict.get("preferred_timeframe", "случайное")
-
-        verification_status = execute_query(
-            "SELECT status FROM verification_requests WHERE user_id = ? ORDER BY request_date DESC LIMIT 1",
-            (user.id,),
-            fetchone=True
-        )
-
-        if verification_status:
-            status = dict(verification_status).get("status", "PENDING")
-            status_map = {
-                "PENDING": "⏳ На проверке у админа",
-                "APPROVED": "✅ Верифицирован",
-                "REJECTED": "❌ Отклонено админом"
-            }
-            status_text = status_map.get(status, "❓ Неизвестно")
-        else:
-            status_text = "❌ Не верифицирован" if is_verified == 0 else "✅ Верифицирован"
-
-        if signals_count > 50:
-            level = "🏆 ПРЕМИУМ"
-        elif signals_count > 20:
-            level = "🥇 ПРОФИ"
-        elif signals_count > 5:
-            level = "🥈 СТАНДАРТ"
-        elif is_verified == 1:
-            level = "🥉 НОВИЧОК"
-        else:
-            level = "🔒 НЕТ ДОСТУПА"
+        status_text = "✅ Верифицирован" if user_dict.get("is_verified", 0) == 1 else "❌ Не верифицирован"
 
         stats_text = f"""
 📊 **ВАША СТАТИСТИКА**
 
-👤 **ПРОФИЛЬ:**
-├ Имя: {user.first_name}
-├ ID: `{user.id}`
-├ Статус: {status_text}
-├ Pocket ID: {pocket_id if pocket_id else 'не указан'}
-├ Выбранное время: {preferred_timeframe if preferred_timeframe else 'случайное'}
-└ Регистрация: {join_date}
-
-🎯 **СИГНАЛЫ:**
-├ Всего сигналов: {signals_count}
-├ Лимит: ♾️ БЕСКОНЕЧНО
-└ Уровень: {level}
-
-👥 **РЕФЕРАЛЫ:**
-├ Приглашено: {ref_count}
-└ Заработано: ${balance:.2f}
+👤 Имя: {user.first_name}
+🆔 ID: `{user.id}`
+📌 Статус: {status_text}
+🎯 Сигналов: {user_dict.get('signals_count', 0)}
+👥 Рефералов: {user_dict.get('ref_count', 0)}
+💰 Баланс: ${user_dict.get('balance', 0):.2f}
+⏱ Время: {user_dict.get('preferred_timeframe', '') or 'случайное'}
 """
-
-        bot.send_message(
-            message.chat.id,
-            stats_text,
-            parse_mode="Markdown",
-            reply_markup=create_main_menu()
-        )
+        bot.send_message(message.chat.id, stats_text, parse_mode="Markdown", reply_markup=create_main_menu())
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(
-            message.chat.id,
-            "❌ Произошла ошибка при получении статистики.",
-            reply_markup=create_main_menu()
-        )
-
+        bot.send_message(message.chat.id, "❌ Ошибка статистики.", reply_markup=create_main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "👥 Рефералы")
 def refs_handler(message):
     try:
         user = message.from_user
-
         try:
             bot_info = bot.get_me()
-            bot_username = bot_info.username
-            ref_link = f"https://t.me/{bot_username}?start={user.id}"
+            ref_link = f"https://t.me/{bot_info.username}?start={user.id}"
         except Exception:
             ref_link = f"https://t.me/ваш_бот?start={user.id}"
 
@@ -1551,66 +1217,37 @@ def refs_handler(message):
 🔗 **ВАША ССЫЛКА:**
 `{ref_link}`
 
-📊 **СТАТИСТИКА:**
-├ Всего приглашено: {ref_count}
-└ Верифицировано: {ref_count} (как в вашей текущей логике)
-
-💰 **ВОЗНАГРАЖДЕНИЯ:**
-├ За каждого верифицированного: $1
-├ Бонус за 10 рефералов: $10
-└ Бонус за 50 рефералов: $50
+📊 Приглашено: {ref_count}
 """
-
-        bot.send_message(
-            message.chat.id,
-            refs_text,
-            parse_mode="Markdown",
-            reply_markup=create_main_menu()
-        )
+        bot.send_message(message.chat.id, refs_text, parse_mode="Markdown", reply_markup=create_main_menu())
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка.", reply_markup=create_main_menu())
-
+        bot.send_message(message.chat.id, "❌ Ошибка.", reply_markup=create_main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "ℹ️ Помощь")
 def help_handler(message):
     help_text = """
-🆘 **ПОМОЩЬ И КОМАНДЫ**
+🆘 **ПОМОЩЬ**
 
-🚀 **ДЛЯ НОВЫХ ПОЛЬЗОВАТЕЛЕЙ:**
-1. Нажмите "🔐 Регистрация"
-2. Зарегистрируйтесь в Pocket Option
-3. Отправьте ваш ID
-4. Ждите проверки администратора
+• "📈 Случайный сигнал" — сигнал по случайному активу
+• "🎯 Сигнал по активу" — выбрать актив
+• "⚙️ Настройки" — выбрать таймфрейм
+• "🔐 Регистрация" — подать заявку на верификацию
 
-📈 **ДЛЯ ТРЕЙДЕРОВ:**
-• "📈 Случайный сигнал" - получить сигнал по случайному активу
-• "🎯 Сигнал по активу" - выбрать актив и получить по нему сигнал
-• "📊 Моя статистика" - ваша статистика
-• "⚙️ Настройки" - настроить время экспирации
-
-⚠️ **ВАЖНО:**
-• Сигналы строятся по теханализу
-• Это не гарантия результата
-• OTC считается через proxy-анализ по обычному активу
-• Торгуйте ответственно
-
-👑 **ЕСЛИ ВЫ АДМИН И ЗАЯВКИ НЕ ПРИХОДЯТ:**
-• Откройте бота
-• Нажмите /start с аккаунта администратора
-• После этого бот сможет присылать вам заявки
-• Также используйте /verify_pending для просмотра заявок из базы
+👑 Если заявки админу не приходят:
+1. Админ должен открыть бота и нажать /start
+2. Потом можно смотреть заявки через /verify_pending
 """
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown", reply_markup=create_main_menu())
 
-
-# ========== CALLBACK ВЕРИФИКАЦИЯ ==========
+# ========== CALLBACK ВЕРИФ ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("verify_"))
 def handle_verification_callback(call):
     try:
-        action = call.data.split("_")[1]
-        user_id = int(call.data.split("_")[2])
+        parts = call.data.split("_")
+        action = parts[1]
+        user_id = int(parts[2])
 
         if call.from_user.id != ADMIN_ID:
             bot.answer_callback_query(call.id, "❌ Только администратор!")
@@ -1621,8 +1258,7 @@ def handle_verification_callback(call):
             bot.answer_callback_query(call.id, "❌ Пользователь не найден!")
             return
 
-        user_dict = dict(user_data)
-        first_name = user_dict.get("first_name", "Пользователь")
+        first_name = dict(user_data).get("first_name", "Пользователь")
 
         if action == "approve":
             execute_query("UPDATE users SET is_verified = 1 WHERE telegram_id = ?", (user_id,), commit=True)
@@ -1633,27 +1269,18 @@ def handle_verification_callback(call):
                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ADMIN_ID, user_id),
                 commit=True
             )
-
             try:
-                bot.send_message(
-                    user_id,
-                    "✅ **ВАША ВЕРИФИКАЦИЯ ПОДТВЕРЖДЕНА!**\n\nТеперь вам доступны сигналы.",
-                    parse_mode="Markdown"
-                )
+                bot.send_message(user_id, "✅ **ВАША ВЕРИФИКАЦИЯ ПОДТВЕРЖДЕНА!**", parse_mode="Markdown")
             except Exception:
                 pass
 
-            try:
-                bot.edit_message_text(
-                    chat_id=call.message.chat.id,
-                    message_id=call.message.message_id,
-                    text=f"✅ **Верификация подтверждена**\n\nПользователь {first_name} (ID: {user_id}) успешно верифицирован.",
-                    parse_mode="Markdown"
-                )
-            except Exception:
-                pass
-
-            bot.answer_callback_query(call.id, "✅ Верификация подтверждена!")
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"✅ **Верификация подтверждена**\n\nПользователь {first_name} (ID: {user_id}) верифицирован.",
+                parse_mode="Markdown"
+            )
+            bot.answer_callback_query(call.id, "✅ Подтверждено!")
 
         elif action == "reject":
             execute_query(
@@ -1663,35 +1290,25 @@ def handle_verification_callback(call):
                 (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ADMIN_ID, user_id),
                 commit=True
             )
-
             try:
-                bot.send_message(
-                    user_id,
-                    f"❌ **ВАША ВЕРИФИКАЦИЯ ОТКЛОНЕНА**\n\nУважаемый {first_name}, проверьте регистрацию и Pocket ID.",
-                    parse_mode="Markdown"
-                )
+                bot.send_message(user_id, "❌ **ВАША ВЕРИФИКАЦИЯ ОТКЛОНЕНА**", parse_mode="Markdown")
             except Exception:
                 pass
 
-            try:
-                bot.edit_message_text(
-                    chat_id=call.message.chat.id,
-                    message_id=call.message.message_id,
-                    text=f"❌ **Верификация отклонена**\n\nПользователь {first_name} (ID: {user_id}) не прошел верификацию.",
-                    parse_mode="Markdown"
-                )
-            except Exception:
-                pass
-
-            bot.answer_callback_query(call.id, "❌ Верификация отклонена!")
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"❌ **Верификация отклонена**\n\nПользователь {first_name} (ID: {user_id}) отклонён.",
+                parse_mode="Markdown"
+            )
+            bot.answer_callback_query(call.id, "❌ Отклонено!")
 
     except Exception:
         traceback.print_exc()
         try:
-            bot.answer_callback_query(call.id, "❌ Произошла ошибка!")
+            bot.answer_callback_query(call.id, "❌ Ошибка!")
         except Exception:
             pass
-
 
 # ========== CALLBACK КАТЕГОРИИ ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("category_"))
@@ -1701,58 +1318,96 @@ def handle_category_callback(call):
         access, _ = check_user_access(user_id, call.from_user.username, call.from_user.first_name)
 
         if not access:
-            bot.answer_callback_query(call.id, "❌ Нет доступа! Пройдите регистрацию.")
+            bot.answer_callback_query(call.id, "❌ Нет доступа!")
             return
 
         if call.data == "category_crypto":
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text="💰 **Выберите криптовалюту:**\n\nНажмите на актив для получения сигнала",
+                text="💰 **Выберите криптовалюту:**",
                 parse_mode="Markdown",
                 reply_markup=create_crypto_menu(1)
             )
-
         elif call.data == "category_forex":
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text="💱 **Выберите валютную пару:**\n\nНажмите на актив для получения сигнала",
+                text="💱 **Выберите валютную пару:**",
                 parse_mode="Markdown",
                 reply_markup=create_forex_menu()
             )
-
         elif call.data == "category_commodities":
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text="🛢️ **Выберите сырьевой актив:**\n\nНажмите на актив для получения сигнала",
+                text="🛢️ **Выберите сырьевой актив:**",
                 parse_mode="Markdown",
                 reply_markup=create_commodities_menu()
             )
-
         elif call.data == "category_indices":
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text="📊 **Выберите индекс:**\n\nНажмите на актив для получения сигнала",
+                text="📊 **Выберите индекс:**",
                 parse_mode="Markdown",
                 reply_markup=create_indices_menu()
             )
-
         elif call.data == "category_otc":
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text="📊 **Выберите OTC актив:**\n\n📌 OTC считается через proxy-анализ по обычному активу.",
+                text="📊 **Выберите OTC актив:**",
                 parse_mode="Markdown",
                 reply_markup=create_otc_menu(1)
             )
-
     except Exception:
         traceback.print_exc()
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка!")
+        bot.answer_callback_query(call.id, "❌ Ошибка!")
 
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_categories")
+def handle_back_to_categories(call):
+    try:
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=f"🎯 **Выберите категорию актива:**\n\n📊 Всего активов: {len(ALL_ASSETS)}+",
+            parse_mode="Markdown",
+            reply_markup=create_assets_menu()
+        )
+    except Exception:
+        traceback.print_exc()
+        bot.answer_callback_query(call.id, "❌ Ошибка!")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("crypto_page_"))
+def handle_crypto_pagination(call):
+    try:
+        page = int(call.data.split("_")[2])
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="💰 **Выберите криптовалюту:**",
+            parse_mode="Markdown",
+            reply_markup=create_crypto_menu(page)
+        )
+    except Exception:
+        traceback.print_exc()
+        bot.answer_callback_query(call.id, "❌ Ошибка!")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("otc_page_"))
+def handle_otc_pagination(call):
+    try:
+        page = int(call.data.split("_")[2])
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text="📊 **Выберите OTC актив:**",
+            parse_mode="Markdown",
+            reply_markup=create_otc_menu(page)
+        )
+    except Exception:
+        traceback.print_exc()
+        bot.answer_callback_query(call.id, "❌ Ошибка!")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("asset_"))
 def handle_asset_callback(call):
@@ -1762,27 +1417,18 @@ def handle_asset_callback(call):
 
         access, _ = check_user_access(user_id, call.from_user.username, call.from_user.first_name)
         if not access:
-            bot.answer_callback_query(call.id, "❌ Нет доступа! Пройдите регистрацию.")
+            bot.answer_callback_query(call.id, "❌ Нет доступа!")
             return
 
         bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-        bot.send_message(
-            call.message.chat.id,
-            f"🎯 Вы выбрали: **{asset}**\n\nГенерирую сигнал...",
-            parse_mode="Markdown"
-        )
+        bot.send_message(call.message.chat.id, f"🎯 Вы выбрали: **{asset}**\n\nГенерирую сигнал...", parse_mode="Markdown")
 
         user_data = get_user(user_id)
         if not user_data:
-            bot.send_message(
-                call.message.chat.id,
-                "❌ Вы не зарегистрированы. Нажмите '🔐 Регистрация'",
-                reply_markup=create_main_menu()
-            )
+            bot.send_message(call.message.chat.id, "❌ Вы не зарегистрированы.", reply_markup=create_main_menu())
             return
 
-        user_dict = dict(user_data)
-        timeframe = user_dict.get("preferred_timeframe", "") or None
+        timeframe = dict(user_data).get("preferred_timeframe", "") or None
 
         time.sleep(1)
         signal_data = neural_net.analyze_market(asset, timeframe)
@@ -1790,9 +1436,7 @@ def handle_asset_callback(call):
         if signal_data.get("unavailable"):
             bot.send_message(
                 call.message.chat.id,
-                f"⚠️ По активу **{signal_data['asset']}** сейчас нельзя построить сигнал.\n\n"
-                f"Причина: {signal_data['price_action']}\n\n"
-                f"Попробуйте другой актив или другой таймфрейм.",
+                f"⚠️ По активу **{signal_data['asset']}** нельзя построить сигнал.\n\nПричина: {signal_data['price_action']}",
                 parse_mode="Markdown",
                 reply_markup=create_main_menu()
             )
@@ -1800,93 +1444,19 @@ def handle_asset_callback(call):
 
         store_signal(user_id, signal_data)
 
-        signal_message = format_signal_message(
-            signal_data,
-            selected_asset=asset,
-            asset_source="🎯 По вашему выбору"
-        )
+        signal_message = format_signal_message(signal_data, selected_asset=asset, asset_source="🎯 По вашему выбору")
         bot.send_message(call.message.chat.id, signal_message, parse_mode="Markdown")
         send_signal_photo(call.message.chat.id, signal_data["direction"])
 
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
-        bot.send_message(call.message.chat.id, "🚀 Быстрый переход для торговли:", reply_markup=markup)
-        bot.send_message(call.message.chat.id, "👇 Используйте меню для дальнейших действий:", reply_markup=create_main_menu())
+        bot.send_message(call.message.chat.id, "🚀 Быстрый переход:", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "👇 Используйте меню:", reply_markup=create_main_menu())
 
     except Exception as e:
         print("Ошибка в handle_asset_callback:")
         traceback.print_exc()
-        bot.send_message(
-            call.message.chat.id,
-            f"❌ Ошибка при генерации сигнала:\n{str(e)}",
-            reply_markup=create_main_menu()
-        )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "back_to_categories")
-def handle_back_to_categories(call):
-    try:
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=f"🎯 **Выберите категорию актива:**\n\n📊 Всего активов: {len(ALL_ASSETS)}+\n📈 Нажмите на актив для получения сигнала",
-            parse_mode="Markdown",
-            reply_markup=create_assets_menu()
-        )
-    except Exception:
-        traceback.print_exc()
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка!")
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("crypto_page_"))
-def handle_crypto_pagination(call):
-    try:
-        user_id = call.from_user.id
-        access, _ = check_user_access(user_id, call.from_user.username, call.from_user.first_name)
-
-        if not access:
-            bot.answer_callback_query(call.id, "❌ Нет доступа! Пройдите регистрацию.")
-            return
-
-        page = int(call.data.split("_")[2])
-
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text="💰 **Выберите криптовалюту:**\n\nНажмите на актив для получения сигнала",
-            parse_mode="Markdown",
-            reply_markup=create_crypto_menu(page)
-        )
-
-    except Exception:
-        traceback.print_exc()
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка!")
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("otc_page_"))
-def handle_otc_pagination(call):
-    try:
-        user_id = call.from_user.id
-        access, _ = check_user_access(user_id, call.from_user.username, call.from_user.first_name)
-
-        if not access:
-            bot.answer_callback_query(call.id, "❌ Нет доступа! Пройдите регистрацию.")
-            return
-
-        page = int(call.data.split("_")[2])
-
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text="📊 **Выберите OTC актив:**\n\n📌 OTC считается через proxy-анализ по обычному активу.",
-            parse_mode="Markdown",
-            reply_markup=create_otc_menu(page)
-        )
-
-    except Exception:
-        traceback.print_exc()
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка!")
-
+        bot.send_message(call.message.chat.id, f"❌ Ошибка при генерации сигнала:\n{str(e)}", reply_markup=create_main_menu())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("timeframe_"))
 def handle_timeframe_callback(call):
@@ -1914,15 +1484,14 @@ def handle_timeframe_callback(call):
         bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
         bot.send_message(
             call.message.chat.id,
-            f"✅ Настройки сохранены!\n\n⏱️ Теперь вы будете получать сигналы с экспирацией: **{timeframe_text}**",
+            f"✅ Настройки сохранены.\n\n⏱️ Экспирация: **{timeframe_text}**",
             parse_mode="Markdown",
             reply_markup=create_main_menu()
         )
 
     except Exception:
         traceback.print_exc()
-        bot.answer_callback_query(call.id, "❌ Произошла ошибка!")
-
+        bot.answer_callback_query(call.id, "❌ Ошибка!")
 
 # ========== АДМИН ==========
 @bot.message_handler(commands=["verify_pending"])
@@ -1942,21 +1511,21 @@ def verify_pending_command(message):
         )
 
         if not pending_requests:
-            bot.send_message(ADMIN_ID, "✅ Нет ожидающих запросов на верификацию.")
+            bot.send_message(ADMIN_ID, "✅ Нет ожидающих заявок.")
             return
 
         for req in pending_requests:
             req_dict = dict(req)
             user_id = req_dict.get("telegram_id", 0)
             first_name = req_dict.get("first_name", "Неизвестно")
-            username = req_dict.get("username", "нет")
+            username = req_dict.get("username", "")
             pocket_id = req_dict.get("pocket_id", "не указан")
             request_date = req_dict.get("request_date", "Неизвестно")
 
             response = (
                 f"👤 **{first_name}**\n"
                 f"├ ID: `{user_id}`\n"
-                f"├ Username: @{username if username else 'нет'}\n"
+                f"├ Username: {username_text(username)}\n"
                 f"├ Pocket ID: {pocket_id}\n"
                 f"└ Запрос: {request_date}\n"
             )
@@ -1971,8 +1540,7 @@ def verify_pending_command(message):
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка.")
-
+        bot.send_message(message.chat.id, "❌ Ошибка.")
 
 @bot.message_handler(commands=["admin"])
 def admin_command(message):
@@ -1992,27 +1560,17 @@ def admin_command(message):
         admin_text = f"""
 👑 **ПАНЕЛЬ АДМИНИСТРАТОРА**
 
-📊 **СТАТИСТИКА БОТА:**
 ├ Всего пользователей: {total_users}
 ├ Верифицировано: {verified_users}
 ├ На проверке: {pending_verifications}
 ├ Выдано сигналов: {total_signals}
 └ Реферальных переходов: {total_refs}
-
-📈 **АКТИВЫ:**
-├ Криптовалюты: {len(CRYPTO_ASSETS)}
-├ Форекс: {len(FOREX_ASSETS)}
-├ Сырье: {len(COMMODITIES_ASSETS)}
-├ Индексы: {len(INDICES_ASSETS)}
-└ OTC: {len(OTC_ASSETS)}
 """
-
         bot.send_message(message.chat.id, admin_text, parse_mode="Markdown")
 
     except Exception:
         traceback.print_exc()
-        bot.send_message(message.chat.id, "❌ Произошла ошибка.")
-
+        bot.send_message(message.chat.id, "❌ Ошибка.")
 
 # ========== ДИАГНОСТИКА ==========
 @bot.message_handler(commands=["fix"])
@@ -2022,27 +1580,15 @@ def fix_command(message):
         access, _ = check_user_access(user.id, user.username, user.first_name)
 
         if access:
-            bot.send_message(
-                message.chat.id,
-                "✅ Ваш доступ успешно восстановлен!\nТеперь вы можете получать сигналы.",
-                reply_markup=create_main_menu()
-            )
+            bot.send_message(message.chat.id, "✅ Ваш доступ активен.", reply_markup=create_main_menu())
         else:
-            bot.send_message(
-                message.chat.id,
-                "❌ Не удалось восстановить доступ.\nНажмите '🔐 Регистрация' для регистрации.",
-                reply_markup=create_main_menu()
-            )
-
+            bot.send_message(message.chat.id, "❌ Доступ не восстановлен. Нажмите '🔐 Регистрация'.", reply_markup=create_main_menu())
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка при исправлении: {str(e)}")
-
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
 
 @bot.message_handler(commands=["reset"])
 def reset_command(message):
-    user = message.from_user
-
-    if user.id != ADMIN_ID:
+    if message.from_user.id != ADMIN_ID:
         bot.send_message(message.chat.id, "❌ Эта команда только для владельца!")
         return
 
@@ -2051,40 +1597,20 @@ def reset_command(message):
         (ADMIN_ID,),
         commit=True
     )
-
     execute_query(
         'DELETE FROM verification_requests WHERE status = "PENDING"',
         commit=True
     )
-
     bot.send_message(
         message.chat.id,
-        "🔄 **СТАТУСЫ СБРОШЕНЫ!**\n\n✅ Все пользователи (кроме владельца) деверифицированы.\n✅ Все ожидающие верификации удалены.",
-        parse_mode="Markdown",
+        "🔄 Все статусы сброшены.",
         reply_markup=create_main_menu()
     )
-
-
-@bot.message_handler(commands=["adminchat"])
-def adminchat_command(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.send_message(message.chat.id, "❌ Только для администратора.")
-        return
-
-    ok = admin_can_receive_messages()
-    if ok:
-        bot.send_message(message.chat.id, "✅ Всё норм. Бот может писать вам в личку.")
-    else:
-        bot.send_message(
-            message.chat.id,
-            "❌ Бот пока не может писать вам в личку.\n\nНажмите /start в чате с ботом именно с админского аккаунта."
-        )
-
 
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("✅ БОТ С МЕНЮ И АНАЛИЗОМ ЗАПУЩЕН!")
+    print("✅ БОТ ЗАПУЩЕН")
     print("=" * 60)
 
     try:
@@ -2099,17 +1625,9 @@ if __name__ == "__main__":
     print(f"├ Сырье: {len(COMMODITIES_ASSETS)}")
     print(f"├ Индексы: {len(INDICES_ASSETS)}")
     print(f"└ OTC: {len(OTC_ASSETS)}")
-    print("=" * 60)
 
-    if os.path.exists(BUY_IMAGE_PATH):
-        print(f"✅ BUY картинка найдена: {BUY_IMAGE_PATH}")
-    else:
-        print(f"⚠️ BUY картинка НЕ найдена: {BUY_IMAGE_PATH}")
-
-    if os.path.exists(SELL_IMAGE_PATH):
-        print(f"✅ SELL картинка найдена: {SELL_IMAGE_PATH}")
-    else:
-        print(f"⚠️ SELL картинка НЕ найдена: {SELL_IMAGE_PATH}")
+    print("✅ BUY картинка:", os.path.exists(BUY_IMAGE_PATH), BUY_IMAGE_PATH)
+    print("✅ SELL картинка:", os.path.exists(SELL_IMAGE_PATH), SELL_IMAGE_PATH)
 
     try:
         bot.polling(none_stop=True, interval=0, timeout=20)
