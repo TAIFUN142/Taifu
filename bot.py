@@ -1,14 +1,12 @@
-import os
-import time
-import random
 import sqlite3
+import random
+import time
 import traceback
-from datetime import datetime
-
-import telebot
 import requests
 import pandas as pd
 import yfinance as yf
+
+from datetime import datetime
 from telebot import types
 
 print("=" * 60)
@@ -16,19 +14,10 @@ print("🤖 БОТ С СИГНАЛАМИ BINARY OPTIONS + РЕФЕРАЛЬНАЯ
 print("=" * 60)
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = "ВСТАВЬ_СЮДА_НОВЫЙ_ТОКЕН"
+TOKEN = "8505054273:AAEKBGGi0SoSee2S0PzvXjFBnTSoR5Gq9bU"
 POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
 ADMIN_ID = 8385943123
-
-# Картинки по URL
-BUY_IMAGE_URL = "https://ladogawine.ru/upload/iblock/6e3/6e3378f996ee86328ff6e6612fc55969.jpg"
-SELL_IMAGE_URL = "https://avatars.mds.yandex.net/i?id=e864fac1656d5f7f8c6cb0abd19209fdf7306990-10239549-images-thumbs&n=13"
-
-DB_NAME = "pocket_bot.db"
 # ===============================
-
-if ":" not in TOKEN:
-    raise ValueError("Token must contain a colon")
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -80,12 +69,13 @@ OTC_ASSETS = [
 ]
 
 ALL_ASSETS = CRYPTO_ASSETS + FOREX_ASSETS + COMMODITIES_ASSETS + INDICES_ASSETS + OTC_ASSETS
+
 TIMEFRAMES = ["1 мин", "5 мин", "15 мин", "30 мин", "1 час", "4 часа", "1 день"]
 
 
 # ========== БАЗА ДАННЫХ ==========
 def get_db_connection():
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn = sqlite3.connect("pocket_bot.db", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -237,12 +227,6 @@ def ensure_owner_access():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            """INSERT OR IGNORE INTO users
-               (telegram_id, username, first_name, join_date, is_verified)
-               VALUES (?, ?, ?, ?, 1)""",
-            (ADMIN_ID, "", "ADMIN", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        )
         cursor.execute("UPDATE users SET is_verified = 1 WHERE telegram_id = ?", (ADMIN_ID,))
         cursor.execute("DELETE FROM verification_requests WHERE user_id = ?", (ADMIN_ID,))
         conn.commit()
@@ -255,55 +239,6 @@ def ensure_owner_access():
 
 
 ensure_owner_access()
-
-
-# ========== ВСПОМОГАТЕЛЬНОЕ ==========
-def format_username(username):
-    return f"@{username}" if username else "нет"
-
-
-def notify_admin_verification_request(user, pocket_id):
-    try:
-        user_data = get_user(user.id)
-        user_dict = dict(user_data) if user_data else {}
-
-        admin_message = f"""
-🆕 **НОВЫЙ ЗАПРОС НА ВЕРИФИКАЦИЮ**
-
-👤 **Пользователь:**
-├ ID: `{user.id}`
-├ Имя: {user_dict.get('first_name', user.first_name)}
-├ Username: {format_username(user.username)}
-└ Pocket ID: {pocket_id}
-
-📅 **Время запроса:** {datetime.now().strftime("%H:%M %d.%m.%Y")}
-"""
-
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"verify_approve_{user.id}"),
-            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"verify_reject_{user.id}")
-        )
-
-        bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown", reply_markup=markup)
-        print(f"✅ Заявка отправлена админу: {user.id}")
-        return True
-
-    except Exception as e:
-        print(f"❌ Ошибка отправки админу: {e}")
-        traceback.print_exc()
-        return False
-
-
-def send_signal_photo(chat_id, direction):
-    try:
-        if direction == "BUY":
-            bot.send_photo(chat_id, BUY_IMAGE_URL, caption="🟢 Сигнал: ПОКУПКА (CALL)")
-        elif direction == "SELL":
-            bot.send_photo(chat_id, SELL_IMAGE_URL, caption="🔴 Сигнал: ПРОДАЖА (PUT)")
-    except Exception as e:
-        print(f"⚠️ Ошибка при отправке фото сигнала: {e}")
-        traceback.print_exc()
 
 
 # ========== АНАЛИЗАТОР ==========
@@ -391,17 +326,7 @@ class MarketAnalyzer:
             "STOXX 50": "^STOXX50E",
             "RUSSELL 2000": "^RUT",
             "SHANGHAI COMP": "000001.SS"
-        }
 
-        self.supported_crypto = {
-            "BTC/USD": "BTCUSDT",
-            "ETH/USD": "ETHUSDT",
-            "BNB/USD": "BNBUSDT",
-            "SOL/USD": "SOLUSDT",
-            "XRP/USD": "XRPUSDT",
-            "ADA/USD": "ADAUSDT",
-            "DOGE/USD": "DOGEUSDT",
-            "DOT/USD": "DOTUSDT",
             "MATIC/USD": "POLUSDT",
             "SHIB/USD": "SHIBUSDT",
             "AVAX/USD": "AVAXUSDT",
@@ -1116,9 +1041,6 @@ def generate_signal(message, asset=None, random_asset=False, timeframe=None):
         signal_message = format_signal_message(signal_data, asset_source=asset_source)
         bot.send_message(message.chat.id, signal_message, parse_mode="Markdown")
 
-        if signal_data["direction"] in ["BUY", "SELL"]:
-            send_signal_photo(message.chat.id, signal_data["direction"])
-
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
         bot.send_message(message.chat.id, "🚀 Быстрый переход для торговли:", reply_markup=markup)
@@ -1373,20 +1295,37 @@ def process_pocket_id(message):
             commit=True
         )
 
-        admin_sent = notify_admin_verification_request(user, pocket_id)
+        user_data = get_user(user.id)
+        user_dict = dict(user_data) if user_data else {}
 
-        if admin_sent:
-            bot.send_message(
-                user.id,
-                "✅ Ваш запрос на верификацию отправлен администратору!\n\n⏳ Ожидайте проверки.",
-                reply_markup=create_main_menu()
-            )
-        else:
-            bot.send_message(
-                user.id,
-                "✅ Заявка сохранена, но уведомление админу не отправилось.\n\nАдмин сможет проверить её через /verify_pending.",
-                reply_markup=create_main_menu()
-            )
+        admin_message = f"""
+🆕 **НОВЫЙ ЗАПРОС НА ВЕРИФИКАЦИЮ**
+
+👤 **Пользователь:**
+├ ID: `{user.id}`
+├ Имя: {user_dict.get('first_name', user.first_name)}
+├ Username: @{user.username if user.username else 'нет'}
+└ Pocket ID: {pocket_id}
+
+📅 **Время запроса:** {datetime.now().strftime("%H:%M %d.%m.%Y")}
+"""
+
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"verify_approve_{user.id}"),
+            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"verify_reject_{user.id}")
+        )
+
+        try:
+            bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            pass
+
+        bot.send_message(
+            user.id,
+            "✅ Ваш запрос на верификацию отправлен администратору!\n\n⏳ Ожидайте проверки.",
+            reply_markup=create_main_menu()
+        )
 
     except Exception:
         traceback.print_exc()
@@ -1526,7 +1465,7 @@ def refs_handler(message):
             bot_username = bot_info.username
             ref_link = f"https://t.me/{bot_username}?start={user.id}"
         except Exception:
-            ref_link = f"https://t.me/ваш_бот?start={user.id}"
+            ref_link = "https://t.me/ваш_бот?start={user.id}"
 
         ref_count_result = execute_query(
             "SELECT COUNT(*) as count FROM referrals WHERE referrer_id = ?",
@@ -1585,11 +1524,6 @@ def help_handler(message):
 • Это не гарантия результата
 • OTC считается через proxy-анализ по обычному активу
 • Торгуйте ответственно
-
-👑 **Если вы админ и заявки не приходят:**
-• Вы уже должны были нажать /start
-• Проверьте, что ADMIN_ID указан правильно
-• Используйте /verify_pending
 """
     bot.send_message(message.chat.id, help_text, parse_mode="Markdown", reply_markup=create_main_menu())
 
@@ -1796,9 +1730,6 @@ def handle_asset_callback(call):
         )
         bot.send_message(call.message.chat.id, signal_message, parse_mode="Markdown")
 
-        if signal_data["direction"] in ["BUY", "SELL"]:
-            send_signal_photo(call.message.chat.id, signal_data["direction"])
-
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📱 Открыть Pocket Option", url=POCKET_REFERRAL_LINK))
         bot.send_message(call.message.chat.id, "🚀 Быстрый переход для торговли:", reply_markup=markup)
@@ -1940,14 +1871,14 @@ def verify_pending_command(message):
             req_dict = dict(req)
             user_id = req_dict.get("telegram_id", 0)
             first_name = req_dict.get("first_name", "Неизвестно")
-            username = req_dict.get("username", "")
+            username = req_dict.get("username", "нет")
             pocket_id = req_dict.get("pocket_id", "не указан")
             request_date = req_dict.get("request_date", "Неизвестно")
 
             response = (
                 f"👤 **{first_name}**\n"
                 f"├ ID: `{user_id}`\n"
-                f"├ Username: {format_username(username)}\n"
+                f"├ Username: @{username if username else 'нет'}\n"
                 f"├ Pocket ID: {pocket_id}\n"
                 f"└ Запрос: {request_date}\n"
             )
@@ -2076,10 +2007,8 @@ if __name__ == "__main__":
     print(f"└ OTC: {len(OTC_ASSETS)}")
     print("=" * 60)
 
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
-        except Exception:
-            print("❌ Ошибка при запуске/работе бота:")
-            traceback.print_exc()
-            time.sleep(5)
+    try:
+        bot.polling(none_stop=True, interval=0, timeout=20)
+    except Exception:
+        print("❌ Ошибка при запуске бота:")
+        traceback.print_exc()
