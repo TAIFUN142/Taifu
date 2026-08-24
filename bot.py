@@ -20,8 +20,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/cvez0moyv8"
-ADMIN_ID = 8385943123
+POCKET_REFERRAL_LINK = "https://pocket-friends.co/r/xpfpfgkfwe"
+ADMIN_ID = 5742716612
 
 BUY_IMAGE_URL = "https://avatars.mds.yandex.net/i?id=4521c3bbb4c12fa8a2af77bc19a2b5d107bca1c3-4593296-images-thumbs&n=13"
 SELL_IMAGE_URL = "https://img-s-msn-com.akamaized.net/tenant/amp/entityid/AA1KsnBG.img?w=1500&h=1000&m=4&q=79"
