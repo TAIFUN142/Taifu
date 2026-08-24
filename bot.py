@@ -772,4 +772,4 @@ def check_user_access(user_id, username, first_name):
         execute_query(
             "DELETE FROM verification_requests WHERE user_id = ?",
             (user_id,),
-            commit=True
+            commit=True)
